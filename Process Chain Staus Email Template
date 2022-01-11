@@ -1,1 +1,126 @@
+*&---------------------------------------------------------------------*
+*& Report Z_LOAD_STATUS
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+REPORT z_load_status.
+TABLES: tvarvc.
+TYPES: BEGIN OF ty_tvarvc,
+        name TYPE tvarvc-name,
+        low  TYPE tvarvc-low,
+        high TYPE tvarvc-high,
+       END OF ty_tvarvc.
+DATA : ls_doc_data    TYPE sodocchgi1,
+       lt_pack        TYPE STANDARD TABLE OF sopcklsti1,
+       ls_pack        TYPE sopcklsti1,
+       lt_contents    TYPE STANDARD TABLE OF solisti1,
+       ls_contents    TYPE solisti1,
+       lt_receivers   TYPE STANDARD TABLE OF somlreci1,
+       ls_receivers   TYPE somlreci1,
+       lt_tvarvc      TYPE STANDARD TABLE OF ty_tvarvc,
+       ls_tvarvc      LIKE LINE OF lt_tvarvc,
+       lv_lines       TYPE i,
+       lv_subject(70),
+       lv_ctime       TYPE char6,
+       lv_cdate       TYPE char10.
 
+CONSTANTS: lc_tvarvc TYPE string VALUE 'Z_DATA_LOAD_STATUS',
+           lc_to     TYPE char2  VALUE 'TO',
+           lc_cc     TYPE char2  VALUE 'CC'.
+
+REFRESH: lt_contents[]  .
+
+SELECT name low high
+FROM tvarvc
+INTO TABLE lt_tvarvc
+WHERE name EQ lc_tvarvc.
+IF sy-subrc IS INITIAL.
+  SORT lt_tvarvc BY name low high.
+ENDIF.
+
+LOOP AT lt_tvarvc INTO ls_tvarvc WHERE name EQ lc_tvarvc.
+  IF ls_tvarvc-high EQ lc_cc.
+    ls_receivers-copy = sy-abcde+23(1).
+  ENDIF.
+
+  ls_receivers-rec_type   = 'U'.
+  ls_receivers-receiver   = ls_tvarvc-low.
+  ls_receivers-com_type   = 'INT'.
+  ls_receivers-notif_del  = sy-abcde+23(1).
+  ls_receivers-notif_ndel = sy-abcde+23(1).
+  APPEND ls_receivers TO lt_receivers .
+  CLEAR:ls_receivers.
+ENDLOOP.
+
+GET TIME STAMP FIELD DATA(lv_timestamp).
+CONVERT TIME STAMP lv_timestamp TIME ZONE sy-zonlo INTO DATE DATA(lv_date) TIME DATA(lv_time).
+CONVERT DATE lv_date TIME lv_time INTO TIME STAMP DATA(lv_convert) TIME ZONE 'UTC+8'.
+CLEAR : lv_date, lv_time.
+
+CONVERT TIME STAMP lv_convert TIME ZONE 'UTC+8' INTO DATE lv_date TIME lv_time.
+CONCATENATE lv_time+0(2) ':' lv_time+2(2) INTO lv_ctime.
+CONCATENATE lv_date+6(2) '-' lv_date+4(2) '-' lv_date+0(4) INTO lv_cdate.
+
+
+ls_doc_data-obj_descr = 'Data Load - Completed'.
+
+ls_contents-line = '<html><head><title>Data Load  (APAC):- Completed</title></head><body><div style="font-family:Verdana">'.
+APPEND ls_contents TO lt_contents.
+ls_contents-line = '<div style="background:olivedrab; text-align:left"><h1 style="color:white">Data Load Status</h1></div>'.
+APPEND ls_contents TO lt_contents.
+
+CONCATENATE '<div style="text-align:left"><b>Subject:</b><p style="color:navy">Process Chain (APAC) Status :-  Completed –-' lv_ctime
+'SGT </p></div>' INTO ls_contents-line SEPARATED BY space.
+CONDENSE ls_contents-line .
+APPEND ls_contents TO lt_contents.
+ls_contents-line = '<div style="text-align:left"><b>Description:</b><p style="color:navy">The Chain is completed.</p></div>'.
+APPEND ls_contents TO lt_contents.
+
+ls_contents-line = '<div style="text-align:left"><b>Potential Impact for Users:</b><p style="color:navy">Latest data is available for reporting.</p></div>'.
+APPEND ls_contents TO lt_contents.
+ls_contents-line = '<div style="text-align:left"><b>BPA / BPC Tasks:</b>'.
+APPEND ls_contents TO lt_contents.
+
+ls_contents-line = '<p style="color:navy"> cascade this information as appropriate.</p></div>'.
+APPEND ls_contents TO lt_contents.
+ls_contents-line = '<div style="text-align:left"><b>-------------------------------------------------------------------------------------</b>'.
+APPEND ls_contents TO lt_contents.
+
+ls_contents-line = '<p style="color:navy">Support team </p></div></div></body></html>'.
+APPEND ls_contents TO lt_contents.
+
+
+DESCRIBE TABLE lt_contents LINES lv_lines.
+******* packlist
+ls_pack-head_start = 1.
+ls_pack-head_num = 0.
+ls_pack-body_start = 1.
+ls_pack-body_num = lv_lines.
+ls_pack-doc_type = 'HTML'.
+APPEND ls_pack TO lt_pack.
+
+
+CALL FUNCTION 'SO_NEW_DOCUMENT_ATT_SEND_API1'
+  EXPORTING
+    document_data              = ls_doc_data
+    put_in_outbox              = 'X'
+    commit_work                = 'X'
+  TABLES
+    packing_list               = lt_pack
+    contents_txt               = lt_contents
+    receivers                  = lt_receivers
+  EXCEPTIONS
+    too_many_receivers         = 1
+    document_not_sent          = 2
+    document_type_not_exist    = 3
+    operation_no_authorization = 4
+    parameter_error            = 5
+    x_error                    = 6
+    enqueue_error              = 7
+    OTHERS                     = 8.
+IF sy-subrc <> 0.
+  MESSAGE 'Mail Triggering Failed' TYPE 'I'.
+ELSE .
+  MESSAGE 'Mail Triggered Successfully' TYPE 'I'.
+  SUBMIT rsconn01 WITH mode = 'INT' WITH output = abap_false AND RETURN.
+ENDIF.
